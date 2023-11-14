@@ -10,8 +10,14 @@ llm_name = "gpt-4"
 openai_api_key = os.getenv("OPENAI_API_KEY")
 llm = ChatOpenAI(temperature=0.3, model=llm_name, openai_api_key=openai_api_key)
 
-INPUT_FILE_PATH = './data/task_sources.csv'
-OUTPUT_FILE_PATH = './data/company_descriptions.csv'
+ENV = "dev"
+
+if ENV == "prod":
+    INPUT_FILE_PATH = './data/task_sources.csv'
+    OUTPUT_FILE_PATH = './data/company_descriptions.csv'
+else:
+    INPUT_FILE_PATH = './data/input_sample.csv'
+    OUTPUT_FILE_PATH = './data/out_langchain.csv'
 
 
 def process_text(index, text, chain):
@@ -35,6 +41,11 @@ def execute_chain_in_parallel(df_column, chain, max_rate=10):
         for future in futures:
             index, result = future.result()
             results_list[index] = result
+            # except concurrent.futures.TimeoutError:
+            #     print('Operation timed out.')
+            # except Exception as e:
+            #     print(f'Function raised {e}')
+
         # End time to ensure rate limit
         end_time = time.time()
         # Calculate the time taken to process the requests
@@ -58,10 +69,19 @@ def preprocess(input_file_path: str) -> pd.DataFrame:
     """
     # Import data
     df = pd.read_csv(input_file_path)
+    df_tmp = pd.DataFrame({"url":[], "timestamp":[], "text":[]})
+
+    for i, text in enumerate(df["text"]):
+        if len(text) < 50:
+            continue
+        df_tmp = pd.concat([df_tmp, df.iloc[i].to_frame().T],
+                           ignore_index=True)
+
+    df = df_tmp
 
     # Set up cleaning chain
     cleaning_prompt = ChatPromptTemplate.from_template(
-        "Clean the following text ```{text}```"
+        "Clean the following text: ```{text}```"
     )
     cleaning_chain = LLMChain(llm=llm, prompt=cleaning_prompt)
 
@@ -96,13 +116,15 @@ def generate_summaries(df: pd.DataFrame) -> pd.DataFrame:
     """
     # Set up summarizing chain
     summarizing_prompt = ChatPromptTemplate.from_template(
-        "Extract summary in the following format enclosed by single quotes"
+        "Extract summary in the format enclosed by single quotes"
         "'PROBLEM: describe the problem the company is trying to solve "
         "SOLUTION: company's proposed solution "
         "TARGET USERS: target users of the company "
         "OTHER DETAILS: other important details of the company', "
         "for the following company description enclosed by triple backticks "
-        "```{company_description}```"
+        "```{company_description}```."
+        "If the information is not available then return a message like this:"
+        "'ERROR: could not infer the required information from the given text.'"
     )
     summarizing_chain = LLMChain(llm=llm, prompt=summarizing_prompt)
 
